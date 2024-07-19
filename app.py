@@ -1,15 +1,28 @@
+import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-import streamlit as st
-import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy.stats import skew, kurtosis
 from io import StringIO
 
-# Fonctions utilitaires pour la suppression des lignes/colonnes
+# CSS pour le fond bleu clair pastel
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #e0f7fa;
+        }
+        .main-header {
+            color: #00695c;
+        }
+        .subheader {
+            color: #004d40;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 def remove_duplicates(data):
     return data.drop_duplicates()
 
@@ -55,6 +68,8 @@ def visualize_data(data, column):
     sns.boxplot(x=data[column], ax=ax)
     st.pyplot(fig)
 
+    calculate_correlation(data)
+
 def perform_pca(data):
     st.header("Analyse en Composantes Principales (PCA)")
     try:
@@ -68,6 +83,10 @@ def perform_pca(data):
         ax.set_xlabel('PCA1')
         ax.set_ylabel('PCA2')
         st.pyplot(fig)
+        
+        st.write("Composants PCA:")
+        st.write(pd.DataFrame(pca.components_, columns=data.select_dtypes(include=['float64', 'int64']).columns, index=['PCA1', 'PCA2']))
+        
     except Exception as e:
         st.error(f"Erreur lors du calcul du PCA : {e}")
 
@@ -76,12 +95,13 @@ def perform_lda(data):
     if 'Cluster' in data.columns:
         try:
             lda = LDA(n_components=2)
-            lda_components = lda.fit_transform(data.select_dtypes(include=['float64', 'int64']).dropna(), data['Cluster'])
+            clean_data = data.dropna(subset=['Cluster'])
+            lda_components = lda.fit_transform(clean_data.select_dtypes(include=['float64', 'int64']), clean_data['Cluster'])
             lda_df = pd.DataFrame(data=lda_components, columns=['LDA1', 'LDA2'])
             st.write(lda_df)
 
             fig, ax = plt.subplots()
-            scatter = ax.scatter(lda_df['LDA1'], lda_df['LDA2'], c=data['Cluster'], cmap='viridis')
+            scatter = ax.scatter(lda_df['LDA1'], lda_df['LDA2'], c=clean_data['Cluster'], cmap='viridis')
             ax.set_xlabel('LDA1')
             ax.set_ylabel('LDA2')
             legend = ax.legend(*scatter.legend_elements(), title="Clusters")
@@ -92,22 +112,47 @@ def perform_lda(data):
     else:
         st.write("L'Analyse Discriminante Linéaire (LDA) nécessite des clusters. Veuillez effectuer le clustering d'abord.")
 
-def perform_clustering(data):
+def plot_elbow_method(data):
+    st.header("Détermination du Nombre Optimal de Clusters (Méthode du Coude)")
+    wcss = []
+    for i in range(1, 11):
+        kmeans = KMeans(n_clusters=i, init='k-means++', max_iter=300, n_init=10, random_state=0)
+        kmeans.fit(data)
+        wcss.append(kmeans.inertia_)
+    fig, ax = plt.subplots()
+    ax.plot(range(1, 11), wcss)
+    ax.set_title('Méthode du Coude')
+    ax.set_xlabel('Nombre de Clusters')
+    ax.set_ylabel('WCSS')
+    st.pyplot(fig)
+
+def perform_clustering(data, key_suffix=""):
     st.header("Clustering des Données")
+
+    plot_elbow_method(data.select_dtypes(include=['float64', 'int64']).dropna())
+
     clustering_method = st.selectbox(
         "Sélectionnez une méthode de clustering",
-        ("K-Means", "DBSCAN")
+        ("K-Means", "DBSCAN"),
+        key=f"clustering_method{key_suffix}"
     )
 
+    clean_data = data.select_dtypes(include=['float64', 'int64']).dropna()
+
     if clustering_method == "K-Means":
-        num_clusters = st.slider("Nombre de clusters (K)", 2, 10, 3)
+        num_clusters = st.slider("Nombre de clusters (K)", 2, 10, 3, key=f"num_clusters{key_suffix}")
         kmeans = KMeans(n_clusters=num_clusters)
-        data['Cluster'] = kmeans.fit_predict(data.select_dtypes(include=['float64', 'int64']).dropna())
+        clusters = kmeans.fit_predict(clean_data)
+        score = kmeans.inertia_
     elif clustering_method == "DBSCAN":
-        eps = st.slider("EPS", 0.1, 10.0, 0.5)
-        min_samples = st.slider("Nombre minimum d'échantillons", 1, 10, 5)
+        eps = st.slider("EPS", 0.1, 10.0, 0.5, key=f"eps{key_suffix}")
+        min_samples = st.slider("Nombre minimum d'échantillons", 1, 10, 5, key=f"min_samples{key_suffix}")
         dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        data['Cluster'] = dbscan.fit_predict(data.select_dtypes(include(['float64', 'int64']).dropna()))
+        clusters = dbscan.fit_predict(clean_data)
+        score = len(set(clusters)) - (1 if -1 in clusters else 0)
+
+    cluster_column = pd.Series(index=clean_data.index, data=clusters)
+    data['Cluster'] = cluster_column
 
     st.write("Aperçu des clusters :")
     st.write(data)
@@ -115,12 +160,10 @@ def perform_clustering(data):
     st.header("Visualisation des Clusters")
     try:
         pca = PCA(n_components=2)
-        components = pca.fit_transform(data.select_dtypes(include=['float64', 'int64']).dropna())
+        components = pca.fit_transform(clean_data)
 
         fig, ax = plt.subplots()
-        scatter = ax.scatter(components[:, 0], components[:, 1], c=data['Cluster'], cmap='viridis')
-        ax.set_xlabel('PCA1')
-        ax.set_ylabel('PCA2')
+        scatter = ax.scatter(components[:, 0], components[:, 1], c=cluster_column, cmap='viridis')
         legend = ax.legend(*scatter.legend_elements(), title="Clusters")
         ax.add_artist(legend)
         st.pyplot(fig)
@@ -130,71 +173,62 @@ def perform_clustering(data):
     except Exception as e:
         st.error(f"Erreur lors de la visualisation des clusters : {e}")
 
-def analyze_data_distribution(data):
-    st.header("Analyse de la Distribution des Données")
-    for column in data.columns:
-        if pd.api.types.is_numeric_dtype(data[column]):
-            st.write(f"**{column}**")
-            st.write(f"Type: Numérique")
-            skewness = skew(data[column].dropna())
-            kurt = kurtosis(data[column].dropna())
-            st.write(f"Asymétrie (Skewness): {skewness}")
-            st.write(f"Aplatissement (Kurtosis): {kurt}")
-            if skewness > -0.5 and skewness < 0.5:
-                st.write("Distribution: Symétrique")
-            elif skewness <= -0.5:
-                st.write("Distribution: Asymétrique à gauche (Négative)")
-            else:
-                st.write("Distribution: Asymétrique à droite (Positive)")
-            st.write("---")
-        else:
-            st.write(f"**{column}**")
-            st.write(f"Type: Catégorique")
-            st.write("Valeurs uniques:")
-            st.write(data[column].value_counts())
-            st.write("---")
+    return score
 
-# Titre de l'application
+def calculate_correlation(data):
+    st.header("Matrice de Corrélation")
+    corr_matrix = data.corr()
+    st.write(corr_matrix)
+
+    fig, ax = plt.subplots()
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', ax=ax)
+    st.pyplot(fig)
+
 st.title('Application d\'Exploration et de Clustering des Données')
 
-# Téléchargement du fichier
-uploaded_file = st.file_uploader("Choisissez un fichier CSV", type="csv")
 
-# Options pour sélectionner l'entête et le séparateur
-header_option = st.selectbox("Ligne d'entête", [None, 0, 1, 2, 3], index=1)
-separator_option = st.selectbox("Type de séparateur", [",", ";", "\t", "|"], index=0)
+menu = st.sidebar.radio("Menu", ["Téléchargement du fichier", "Aperçu des Données", "Résumé Statistique des Données", "Prétraitement et Nettoyage des Données", "Visualisation des Données", "Analyse en Composantes Principales (PCA)", "Analyse Discriminante Linéaire (LDA)", "Clustering des Données"])
 
-# Liste des encodages courants
-encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-encoding_option = st.selectbox("Choisissez un encodage", encodings, index=0)
+if menu == "Téléchargement du fichier":
+    uploaded_file = st.file_uploader("Choisissez un fichier CSV", type="csv")
 
-if uploaded_file is not None:
-    try:
-        # Lire le contenu du fichier en tant que bytes
-        bytes_data = uploaded_file.getvalue()
+    header_option = st.selectbox("Ligne d'entête", [None, 0, 1, 2, 3], index=1, key="header_option")
+    separator_option = st.selectbox("Type de séparateur", [",", ";", "\t", "|"], index=0, key="separator_option")
 
-        # Convertir en StringIO
-        stringio = StringIO(bytes_data.decode(encoding_option))
+    encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+    encoding_option = st.selectbox("Choisissez un encodage", encodings, index=0, key="encoding_option")
 
-        # Lire les données en tant que chaîne de caractères
-        string_data = stringio.read()
-
-        # Utiliser pandas pour lire le fichier CSV avec les options spécifiées
+    if uploaded_file is not None:
         try:
-            df = pd.read_csv(StringIO(string_data), header=header_option, delimiter=separator_option)
-        except pd.errors.ParserError as e:
-            st.error(f"Erreur de parsing du fichier : {e}")
-            st.stop()
-        except UnicodeDecodeError as e:
-            st.error(f"Erreur d'encodage du fichier : {e}")
-            st.stop()
 
-        # Stocker le DataFrame initial dans st.session_state
-        st.session_state.df = df
+            bytes_data = uploaded_file.getvalue()
 
-        st.write("DataFrame :", df.head())
+            stringio = StringIO(bytes_data.decode(encoding_option))
 
-        # Affichage des premières et dernières lignes du fichier
+            string_data = stringio.read()
+
+            try:
+                df = pd.read_csv(StringIO(string_data), header=header_option, delimiter=separator_option)
+            except pd.errors.ParserError as e:
+                st.error(f"Erreur de parsing du fichier : {e}")
+                st.stop()
+            except UnicodeDecodeError as e:
+                st.error(f"Erreur d'encodage du fichier : {e}")
+                st.stop()
+
+            st.session_state.df = df
+            st.session_state.df_cleaned = df.copy()  
+
+            st.write("DataFrame :", df.head())
+
+        except Exception as e:
+            st.error(f"Erreur lors du chargement du fichier : {e}")
+
+if 'df' in st.session_state:
+    df = st.session_state.df
+    df_cleaned = st.session_state.df_cleaned
+
+    if menu == "Aperçu des Données":
         st.header("Aperçu des Données")
         st.write("Premières lignes du dataset :")
         st.write(df.head())
@@ -202,7 +236,7 @@ if uploaded_file is not None:
         st.write("Dernières lignes du dataset :")
         st.write(df.tail())
 
-        # Résumé statistique de base
+    elif menu == "Résumé Statistique des Données":
         st.header("Résumé Statistique des Données")
         st.write("Nombre de lignes et de colonnes :")
         st.write(df.shape)
@@ -214,89 +248,77 @@ if uploaded_file is not None:
         missing_values_count = df.isnull().sum()
         missing_values_percent = (missing_values_count / len(df)) * 100
         missing_values_table = pd.DataFrame({'Valeurs manquantes': missing_values_count, 'Pourcentage (%)': missing_values_percent})
-        st.write(missing_values_table.T)  # Transposer pour un affichage horizontal
+        st.write(missing_values_table.T) 
 
         st.write("Résumé statistique :")
-        st.write(df.describe(include='all').T)  # Transposer pour un affichage horizontal
+        st.write(df.describe(include='all').T)  
 
-        # Analyse de la Distribution des Données
-        analyze_data_distribution(df)
-
-        # Prétraitement et Nettoyage des Données
+    elif menu == "Prétraitement et Nettoyage des Données":
         st.header("Prétraitement et Nettoyage des Données")
 
-        # Options supplémentaires pour la suppression des lignes et colonnes
         st.subheader('Suppression de valeurs manquantes')
         if st.button('Supprimer les doublons'):
-            st.session_state.df = remove_duplicates(st.session_state.df)
+            st.session_state.df_cleaned = remove_duplicates(st.session_state.df_cleaned)
             st.write('Lignes doublons supprimées')
-            st.write(st.session_state.df)
+            st.write(st.session_state.df_cleaned)
 
         if st.button('Supprimer les lignes entièrement vides'):
-            st.session_state.df = remove_empty_rows(st.session_state.df)
+            st.session_state.df_cleaned = remove_empty_rows(st.session_state.df_cleaned)
             st.write('Lignes entièrement vides supprimées')
-            st.write(st.session_state.df)
+            st.write(st.session_state.df_cleaned)
 
         if st.button('Supprimer les lignes avec plus de 80% de valeurs manquantes'):
-            st.session_state.df = remove_high_missing_rows(st.session_state.df)
+            st.session_state.df_cleaned = remove_high_missing_rows(st.session_state.df_cleaned)
             st.write('Lignes avec plus de 80% de valeurs manquantes supprimées')
-            st.write(st.session_state.df)
+            st.write(st.session_state.df_cleaned)
 
         if st.button('Supprimer les colonnes avec plus de 80% de valeurs manquantes'):
-            st.session_state.df = remove_high_missing_cols(st.session_state.df)
+            st.session_state.df_cleaned = remove_high_missing_cols(st.session_state.df_cleaned)
             st.write('Colonnes avec plus de 80% de valeurs manquantes supprimées')
-            st.write(st.session_state.df)
+            st.write(st.session_state.df_cleaned)
 
-        # Créer une copie du DataFrame nettoyé pour la suite
-        df_cleaned = st.session_state.df.copy()
-
-        # Recalcul des valeurs manquantes après suppression
         st.write("Nombre de valeurs manquantes par colonne après suppression :")
-        missing_values_count = df_cleaned.isnull().sum()
-        missing_values_percent = (missing_values_count / len(df_cleaned)) * 100
+        missing_values_count = st.session_state.df_cleaned.isnull().sum()
+        missing_values_percent = (missing_values_count / len(st.session_state.df_cleaned)) * 100
         missing_values_table = pd.DataFrame({'Valeurs manquantes': missing_values_count, 'Pourcentage (%)': missing_values_percent})
-        st.write(missing_values_table.T)  # Transposer pour un affichage horizontal
+        st.write(missing_values_table.T)  
 
-        # Gestion des valeurs manquantes
         st.subheader("Gestion des valeurs manquantes")
         missing_value_method = st.selectbox(
             "Sélectionnez une méthode pour gérer les valeurs manquantes",
-            ("Aucune", "Remplacer par la moyenne", "Remplacer par la médiane", "Remplacer par le mode")
+            ("Aucune", "Remplacer par la moyenne", "Remplacer par la médiane", "Remplacer par le mode"),
+            key="missing_value_method"
         )
 
         if missing_value_method != "Aucune":
-            df_cleaned = handle_missing_values(df_cleaned, missing_value_method)
+            st.session_state.df_cleaned = handle_missing_values(st.session_state.df_cleaned, missing_value_method)
 
         st.write("Données après gestion des valeurs manquantes :")
-        st.write(df_cleaned)
+        st.write(st.session_state.df_cleaned)
 
-        # Normalisation des données
         st.subheader("Normalisation des données")
         normalization_method = st.selectbox(
             "Sélectionnez une méthode de normalisation",
-            ("Aucune", "Min-Max", "Z-Score")
+            ("Aucune", "Min-Max", "Z-Score"),
+            key="normalization_method"
         )
 
         if normalization_method != "Aucune":
-            df_cleaned = normalize_data(df_cleaned, normalization_method)
+            st.session_state.df_cleaned = normalize_data(st.session_state.df_cleaned, normalization_method)
 
         st.write("Données après normalisation :")
-        st.write(df_cleaned)
+        st.write(st.session_state.df_cleaned)
 
-        # Visualisation des Données
+    elif menu == "Visualisation des Données":
         st.header("Visualisation des Données")
-        column_to_plot = st.selectbox("Sélectionnez une colonne à visualiser", df_cleaned.columns)
-        visualize_data(df_cleaned, column_to_plot)
+        column_to_plot = st.selectbox("Sélectionnez une colonne à visualiser", df.columns, key="column_to_plot")
+        visualize_data(df, column_to_plot)
 
-        # Perform PCA
-        perform_pca(df_cleaned)
+    elif menu == "Analyse en Composantes Principales (PCA)":
+        perform_pca(st.session_state.df_cleaned)
 
-        # Perform LDA
-        perform_lda(df_cleaned)
+    elif menu == "Analyse Discriminante Linéaire (LDA)":
+        perform_lda(st.session_state.df_cleaned)
 
-        # Perform Clustering
-        perform_clustering(df_cleaned)
-
-    except Exception as e:
-        st.error(f"Erreur lors du chargement du fichier : {e}")
-
+    elif menu == "Clustering des Données":
+        perform_clustering(st.session_state.df_cleaned, key_suffix="main")
