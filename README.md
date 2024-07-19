@@ -1,4 +1,5 @@
-# DataMining
+# GitHub : https://github.com/MarieAngeA/DataMining/tree/main
+
 This Streamlit application allows users to upload a CSV file, perform data preprocessing, visualize data distributions, and conduct clustering analysis using K-Means and DBSCAN. The application also includes Principal Component Analysis (PCA) and Linear Discriminant Analysis (LDA) for dimensionality reduction and better visualization of clusters.
 
 Features
